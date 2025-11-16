@@ -5,17 +5,21 @@ if (!isset($_SESSION['admin'])) {
     exit;
 }
 
-$id = $_GET['id'] ?? 0;
-if (!$id) {
-    header("Location: dashboard.php");
-    exit;
+$id = 0;
+if (isset($_GET['key'])) {
+    $key = $_GET['key'];
+    $stmt = $pdo->prepare("SELECT id FROM forms WHERE public_key = ?");
+    $stmt->execute([$key]);
+    $id = (int) $stmt->fetchColumn();
+} else {
+    $id = (int) ($_GET['id'] ?? 0);
 }
 
-// Hapus form + cascading ke tabel lain
-// Pastikan di database sudah ada foreign key dengan ON DELETE CASCADE
-// untuk questions, responses, response_answers, response_files jika dipakai.
-$stmt = $pdo->prepare("DELETE FROM forms WHERE id = ?");
-$stmt->execute([$id]);
+if ($id) {
+    // Pastikan foreign key ON DELETE CASCADE sudah diset untuk tables terkait
+    $stmt = $pdo->prepare("DELETE FROM forms WHERE id = ?");
+    $stmt->execute([$id]);
+}
 
 header("Location: dashboard.php");
 exit;

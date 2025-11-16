@@ -2,12 +2,30 @@
 require '../config.php';
 if (!isset($_SESSION['admin'])) header("Location: ../login.php");
 
-$id = $_GET['id'] ?? 0;
+$form = null;
+$id   = 0;
 
-// Ambil form
-$stmt = $pdo->prepare("SELECT * FROM forms WHERE id=?");
-$stmt->execute([$id]);
-$form = $stmt->fetch();
+if (isset($_GET['key'])) {
+    $key = $_GET['key'];
+    $stmt = $pdo->prepare("SELECT * FROM forms WHERE public_key = ?");
+    $stmt->execute([$key]);
+    $form = $stmt->fetch();
+    if ($form) {
+        $id = $form['id'];
+    }
+} else {
+    $id = (int) ($_GET['id'] ?? 0);
+    if ($id) {
+        $stmt = $pdo->prepare("SELECT * FROM forms WHERE id = ?");
+        $stmt->execute([$id]);
+        $form = $stmt->fetch();
+    }
+}
+
+if (!$form) {
+    echo "Form tidak ditemukan.";
+    exit;
+}
 
 // Ambil pertanyaan
 $q = $pdo->prepare("SELECT * FROM questions WHERE form_id=? ORDER BY id");

@@ -1,9 +1,9 @@
 RewriteEngine On
 RewriteBase /App_Form/
 
-# Route ke public/f/{id}
-RewriteRule ^f/([0-9]+)$ public/f/index.php?id=$1 [L,QSA]
+# /f/{public_key} -> /public/f/index.php?key={public_key}
+RewriteRule ^f/([A-Za-z0-9]+)$ public/f/index.php?key=$1 [L,QSA]
 
-# Izinkan file asli tetap bisa diakses
+# Biar file/folder asli tetap bisa diakses
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d

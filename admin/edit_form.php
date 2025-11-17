@@ -1,9 +1,13 @@
 <?php
 require '../config.php';
-if (!isset($_SESSION['admin'])) header("Location: ../login.php");
+if (!isset($_SESSION['admin'])) {
+    header("Location: ../login.php");
+    exit;
+}
 
+// Ambil form berdasarkan key atau id
 $form = null;
-$id   = 0;
+$form_id = 0;
 
 if (isset($_GET['key'])) {
     $key = $_GET['key'];
@@ -11,13 +15,13 @@ if (isset($_GET['key'])) {
     $stmt->execute([$key]);
     $form = $stmt->fetch();
     if ($form) {
-        $id = $form['id'];
+        $form_id = $form['id'];
     }
 } else {
-    $id = (int) ($_GET['id'] ?? 0);
-    if ($id) {
+    $form_id = (int) ($_GET['id'] ?? 0);
+    if ($form_id) {
         $stmt = $pdo->prepare("SELECT * FROM forms WHERE id = ?");
-        $stmt->execute([$id]);
+        $stmt->execute([$form_id]);
         $form = $stmt->fetch();
     }
 }
@@ -27,85 +31,89 @@ if (!$form) {
     exit;
 }
 
-// Ambil pertanyaan
-$q = $pdo->prepare("SELECT * FROM questions WHERE form_id=? ORDER BY id");
-$q->execute([$id]);
-$questions = $q->fetchAll();
+// Saat submit (update form + pertanyaan)
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $title = $_POST['title'] ?? '';
+    $desc  = $_POST['description'] ?? '';
 
-// Update
-if ($_POST) {
-    $title = $_POST['title'];
-    $desc  = $_POST['description'];
-    $allow = isset($_POST['allow_attachments']) ? 1 : 0;
-
-    $pdo->prepare("UPDATE forms SET title=?, description=?, allow_attachments=? WHERE id=?")
-        ->execute([$title, $desc, $allow, $id]);
-
-    // Update existing questions
-    foreach ($_POST['q_id'] as $i => $qid) {
-        $question = $_POST['question'][$i];
-        $type     = $_POST['type'][$i];
-        $options  = $_POST['options'][$i] ?? '';
-
-        $pdo->prepare("UPDATE questions SET question=?, type=?, options=? WHERE id=?")
-            ->execute([$question, $type, $options, $qid]);
-    }
-
-    // Tambah pertanyaan baru jika ada
-    if (!empty($_POST['new_question'])) {
-        foreach ($_POST['new_question'] as $idx => $qtext) {
-            if (!empty($qtext)) {
-                $pdo->prepare("INSERT INTO questions (form_id, question, type, options) VALUES (?,?,?,?)")
-                    ->execute([$id, $qtext, $_POST['new_type'][$idx], $_POST['new_options'][$idx]]);
+    // Cek apakah ada pertanyaan bertipe "file"
+    $allow = 0;
+    if (!empty($_POST['type'])) {
+        foreach ($_POST['type'] as $t) {
+            if ($t === 'file') {
+                $allow = 1;
+                break;
             }
         }
     }
 
-    header("Location: dashboard.php");
+    // Update forms
+    $stmt = $pdo->prepare("
+        UPDATE forms 
+        SET title = ?, description = ?, allow_attachments = ?
+        WHERE id = ?
+    ");
+    $stmt->execute([$title, $desc, $allow, $form_id]);
+
+    // Hapus semua pertanyaan lama lalu insert ulang (lebih sederhana)
+    $pdo->prepare("DELETE FROM questions WHERE form_id = ?")->execute([$form_id]);
+
+    if (!empty($_POST['question'])) {
+        foreach ($_POST['question'] as $i => $q) {
+            $q = trim($q ?? '');
+            if ($q === '') continue;
+
+            $type    = $_POST['type'][$i] ?? 'text';
+            $options = $_POST['options'][$i] ?? '';
+
+            $pdo->prepare("
+                INSERT INTO questions (form_id, question, type, options)
+                VALUES (?,?,?,?)
+            ")->execute([$form_id, $q, $type, $options]);
+        }
+    }
+
+    header("Location: view_form.php?key=" . urlencode($form['public_key']));
     exit;
 }
+
+// Ambil pertanyaan untuk tampilan form edit
+$q = $pdo->prepare("SELECT * FROM questions WHERE form_id = ? ORDER BY id ASC");
+$q->execute([$form_id]);
+$questions = $q->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="id">
 <head>
     <meta charset="UTF-8">
-    <title>Edit Form</title>
+    <title>Edit Form - <?= htmlspecialchars($form['title']) ?></title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-
     <style>
-        body {
-            background-color: #f1f3f4;
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        }
-        .form-wrapper { max-width: 900px; margin: 32px auto; }
-        .gform-card { border-radius: 16px; border: none; }
+        body { background-color:#f1f3f4; font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+        .form-wrapper { max-width:900px; margin:32px auto; }
+        .gform-card { border-radius:16px; border:none; }
         .gform-header {
-            background: linear-gradient(120deg, #34a853, #0b8043);
-            color: #fff;
-            border-radius: 16px 16px 0 0;
-            padding: 24px 24px 16px;
+            background:linear-gradient(120deg,#1a73e8,#185abc);
+            color:#fff;border-radius:16px 16px 0 0;padding:20px 24px 16px;
         }
-        .gform-header h1 { font-size: 1.5rem; margin: 0 0 8px; }
-        .gform-header p { margin: 0; opacity: .9; }
-        .question-card { border-radius: 16px; border: 1px solid #dadce0; }
+        .gform-header h1 { font-size:1.5rem;margin:0 0 6px; }
+        .gform-header p { margin:0;opacity:.9; }
+        .question-card { border-radius:16px;border:1px solid #dadce0; }
     </style>
-
     <script>
-        function addNewQ() {
-            let c = document.getElementById("new_questions");
-            c.insertAdjacentHTML('beforeend', `
+        function addQ() {
+            let area = document.getElementById("q-list");
+            area.insertAdjacentHTML('beforeend', `
                 <div class="card question-card shadow-sm mb-3">
                     <div class="card-body">
                         <div class="mb-3">
-                            <label class="form-label">Pertanyaan Baru</label>
-                            <input name="new_question[]" class="form-control" placeholder="Tulis pertanyaan">
+                            <label class="form-label">Pertanyaan</label>
+                            <input name="question[]" class="form-control" placeholder="Tulis pertanyaan">
                         </div>
-
                         <div class="mb-3">
                             <label class="form-label">Tipe Input</label>
-                            <select name="new_type[]" class="form-select">
+                            <select name="type[]" class="form-select">
                                 <option value="text">Text</option>
                                 <option value="textarea">Textarea</option>
                                 <option value="number">Number</option>
@@ -113,15 +121,18 @@ if ($_POST) {
                                 <option value="radio">Radio</option>
                                 <option value="checkbox">Checkbox</option>
                                 <option value="select">Select</option>
+                                <option value="file">Upload File (Foto/Dokumen)</option>
                             </select>
                         </div>
-
                         <div class="mb-3">
                             <label class="form-label">
-                                Opsi (jika radio/checkbox/select) — pisahkan baris baru
+                                Opsi (radio/checkbox/select — pisahkan per baris)
+                                <span class="text-muted small d-block">
+                                    Kosongkan untuk tipe selain radio/checkbox/select
+                                </span>
                             </label>
-                            <textarea name="new_options[]" class="form-control" rows="2"
-                                      placeholder="opsi1&#10;opsi2"></textarea>
+                            <textarea name="options[]" class="form-control" rows="2"
+                                      placeholder="opsi1&#10;opsi2&#10;opsi3"></textarea>
                         </div>
                     </div>
                 </div>
@@ -132,16 +143,24 @@ if ($_POST) {
 <body>
 <div class="form-wrapper">
     <div class="card gform-card shadow-sm mb-3">
-        <div class="gform-header">
-            <h1>Edit Form</h1>
-            <p>Ubah judul, deskripsi, pertanyaan, dan pengaturan upload dokumen/foto.</p>
+        <div class="gform-header d-flex justify-content-between align-items-center">
+            <div>
+                <h1>Edit Form</h1>
+                <p>Edit judul, deskripsi, dan pertanyaan (termasuk upload file).</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a href="dashboard.php" class="btn btn-light btn-sm">&larr; Dashboard</a>
+                <a href="view_form.php?key=<?= urlencode($form['public_key']) ?>" class="btn btn-outline-light btn-sm">
+                    Lihat Detail
+                </a>
+            </div>
         </div>
         <div class="card-body">
             <form method="POST">
                 <div class="mb-3">
                     <label class="form-label">Judul Form</label>
-                    <input name="title" class="form-control"
-                           value="<?= htmlspecialchars($form['title']) ?>" required>
+                    <input name="title" class="form-control" required
+                           value="<?= htmlspecialchars($form['title']) ?>">
                 </div>
 
                 <div class="mb-3">
@@ -149,59 +168,94 @@ if ($_POST) {
                     <textarea name="description" class="form-control" rows="3"><?= htmlspecialchars($form['description']) ?></textarea>
                 </div>
 
-                <!-- Checkbox aktifkan upload file -->
-                <div class="form-check form-switch mb-4">
-                    <input class="form-check-input" type="checkbox" id="allow_attachments" name="allow_attachments"
-                           <?= $form['allow_attachments'] ? 'checked' : '' ?>>
-                    <label class="form-check-label" for="allow_attachments">
-                        Izinkan responden meng-upload dokumen / foto pada form ini
-                    </label>
-                </div>
-
                 <h5 class="mt-2 mb-3">Pertanyaan</h5>
 
-                <?php foreach ($questions as $q): ?>
-                    <div class="card question-card shadow-sm mb-3">
-                        <div class="card-body">
-                            <input type="hidden" name="q_id[]" value="<?= $q['id'] ?>">
-
-                            <div class="mb-3">
-                                <label class="form-label">Pertanyaan</label>
-                                <input name="question[]" class="form-control"
-                                       value="<?= htmlspecialchars($q['question']) ?>">
+                <div id="q-list">
+                    <?php if (!empty($questions)): ?>
+                        <?php foreach ($questions as $qrow): ?>
+                            <div class="card question-card shadow-sm mb-3">
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <label class="form-label">Pertanyaan</label>
+                                        <input name="question[]" class="form-control"
+                                               value="<?= htmlspecialchars($qrow['question']) ?>">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Tipe Input</label>
+                                        <select name="type[]" class="form-select">
+                                            <?php
+                                            $types = [
+                                                'text'     => 'Text',
+                                                'textarea' => 'Textarea',
+                                                'number'   => 'Number',
+                                                'date'     => 'Date',
+                                                'radio'    => 'Radio',
+                                                'checkbox' => 'Checkbox',
+                                                'select'   => 'Select',
+                                                'file'     => 'Upload File (Foto/Dokumen)',
+                                            ];
+                                            foreach ($types as $val => $label):
+                                            ?>
+                                                <option value="<?= $val ?>"
+                                                    <?= $qrow['type'] === $val ? 'selected' : '' ?>>
+                                                    <?= $label ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">
+                                            Opsi (radio/checkbox/select — pisahkan per baris)
+                                            <span class="text-muted small d-block">
+                                                Kosongkan untuk tipe selain radio/checkbox/select
+                                            </span>
+                                        </label>
+                                        <textarea name="options[]" class="form-control" rows="2"
+                                                  placeholder="opsi1&#10;opsi2&#10;opsi3"><?= htmlspecialchars($qrow['options']) ?></textarea>
+                                    </div>
+                                </div>
                             </div>
-
-                            <div class="mb-3">
-                                <label class="form-label">Tipe Input</label>
-                                <select name="type[]" class="form-select">
-                                    <option value="text"     <?= $q['type']=='text'     ?'selected':'' ?>>Text</option>
-                                    <option value="textarea" <?= $q['type']=='textarea'?'selected':'' ?>>Textarea</option>
-                                    <option value="number"   <?= $q['type']=='number'  ?'selected':'' ?>>Number</option>
-                                    <option value="date"     <?= $q['type']=='date'    ?'selected':'' ?>>Date</option>
-                                    <option value="radio"    <?= $q['type']=='radio'   ?'selected':'' ?>>Radio</option>
-                                    <option value="checkbox" <?= $q['type']=='checkbox'?'selected':'' ?>>Checkbox</option>
-                                    <option value="select"   <?= $q['type']=='select'  ?'selected':'' ?>>Select</option>
-                                </select>
-                            </div>
-
-                            <div class="mb-3">
-                                <label class="form-label">
-                                    Opsi (jika radio/checkbox/select)
-                                </label>
-                                <textarea name="options[]" class="form-control" rows="2"><?= $q['options'] ?></textarea>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <!-- Jika belum ada pertanyaan sama sekali -->
+                        <div class="card question-card shadow-sm mb-3">
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <label class="form-label">Pertanyaan</label>
+                                    <input name="question[]" class="form-control" placeholder="Pertanyaan 1">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Tipe Input</label>
+                                    <select name="type[]" class="form-select">
+                                        <option value="text">Text</option>
+                                        <option value="textarea">Textarea</option>
+                                        <option value="number">Number</option>
+                                        <option value="date">Date</option>
+                                        <option value="radio">Radio</option>
+                                        <option value="checkbox">Checkbox</option>
+                                        <option value="select">Select</option>
+                                        <option value="file">Upload File (Foto/Dokumen)</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">
+                                        Opsi (radio/checkbox/select — pisahkan per baris)
+                                        <span class="text-muted small d-block">
+                                            Kosongkan untuk tipe selain radio/checkbox/select
+                                        </span>
+                                    </label>
+                                    <textarea name="options[]" class="form-control" rows="2"
+                                              placeholder="opsi1&#10;opsi2&#10;opsi3"></textarea>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                <?php endforeach; ?>
-
-                <h5 class="mt-4 mb-3">Tambah Pertanyaan Baru</h5>
-                <div id="new_questions"></div>
+                    <?php endif; ?>
+                </div>
 
                 <div class="d-flex justify-content-between align-items-center mt-3">
-                    <button type="button" onclick="addNewQ()" class="btn btn-outline-primary">
+                    <button type="button" onclick="addQ()" class="btn btn-outline-primary">
                         + Tambah Pertanyaan
                     </button>
-
                     <button type="submit" class="btn btn-primary">
                         Simpan Perubahan
                     </button>
@@ -210,7 +264,6 @@ if ($_POST) {
         </div>
     </div>
 </div>
-
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

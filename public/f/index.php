@@ -17,6 +17,15 @@ $form_id = $form['id'];
 $q = $pdo->prepare("SELECT * FROM questions WHERE form_id = ? ORDER BY id ASC");
 $q->execute([$form_id]);
 $questions = $q->fetchAll();
+
+// Cek apakah ada pertanyaan bertipe "file"
+$hasFileQuestion = false;
+foreach ($questions as $qrow) {
+    if ($qrow['type'] === 'file') {
+        $hasFileQuestion = true;
+        break;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -54,7 +63,8 @@ $questions = $q->fetchAll();
         </div>
     </div>
 
-    <form action="/App_Form/public/submit.php" method="POST" enctype="multipart/form-data" class="mb-4">
+    <!-- penting: enctype untuk upload file -->
+    <form action="../public/submit.php" method="POST" enctype="multipart/form-data" class="mb-4">
         <input type="hidden" name="form_id" value="<?= $form_id ?>">
 
         <?php foreach ($questions as $qrow): ?>
@@ -128,6 +138,17 @@ $questions = $q->fetchAll();
                             <?php endforeach; ?>
                         </select>
 
+                    <?php elseif ($type === 'file'): ?>
+                        <!-- input file per pertanyaan -->
+                        <input type="file"
+                               name="file_question_<?= $qrow['id'] ?>[]"
+                               class="form-control"
+                               multiple
+                               accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx">
+                        <div class="form-text">
+                            Unggah foto atau dokumen. Bisa memilih beberapa file sekaligus.
+                        </div>
+
                     <?php else: ?>
                         <input type="text" name="<?= $name ?>" class="form-control">
                     <?php endif; ?>
@@ -135,7 +156,8 @@ $questions = $q->fetchAll();
             </div>
         <?php endforeach; ?>
 
-        <?php if (!empty($form['allow_attachments'])): ?>
+        <?php if (!$hasFileQuestion && !empty($form['allow_attachments'])): ?>
+            <!-- fallback untuk form lama yang masih pakai attachments[] global -->
             <div class="card question-card shadow-sm mb-3">
                 <div class="card-body">
                     <label class="question-label d-block mb-2">

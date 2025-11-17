@@ -6,30 +6,35 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 $form_id = (int) ($_POST['form_id'] ?? 0);
-if (!$form_id) die("Form tidak ditemukan.");
+if (!$form_id) {
+    die("Form tidak ditemukan.");
+}
 
-// Ambil form (untuk cek dan ambil public_key)
+// Ambil data form
 $stmt = $pdo->prepare("SELECT * FROM forms WHERE id = ?");
 $stmt->execute([$form_id]);
 $form = $stmt->fetch();
-if (!$form) die("Form tidak ditemukan.");
+if (!$form) {
+    die("Form tidak ditemukan.");
+}
 
 $allow_attachments = !empty($form['allow_attachments']);
 $public_key        = $form['public_key'];
 
-// Ambil semua pertanyaan form ini
+// Ambil semua pertanyaan
 $q = $pdo->prepare("SELECT * FROM questions WHERE form_id = ? ORDER BY id ASC");
 $q->execute([$form_id]);
 $questions = $q->fetchAll();
 
-// Simpan ke tabel responses
+// Mulai transaksi simpan response
 $pdo->beginTransaction();
 try {
+    // Insert ke tabel responses
     $stmt = $pdo->prepare("INSERT INTO responses (form_id, created_at) VALUES (?, NOW())");
     $stmt->execute([$form_id]);
     $response_id = $pdo->lastInsertId();
 
-    // Simpan jawaban per pertanyaan
+    // Prepared statement simpan jawaban
     $ansStmt = $pdo->prepare("
         INSERT INTO response_answers (response_id, question_id, answer)
         VALUES (?,?,?)
@@ -37,45 +42,105 @@ try {
 
     foreach ($questions as $qrow) {
         $fieldName = "question_" . $qrow['id'];
+        $answer    = '';
 
-        if (!isset($_POST[$fieldName])) {
-            $answer = '';
-        } else {
-            $value = $_POST[$fieldName];
-            if (is_array($value)) {
-                $answer = implode(", ", $value);
+        if ($qrow['type'] === 'file') {
+            // Jika tipe file, ambil daftar nama file yang diupload (untuk disimpan sebagai teks)
+            $fileInputName = "file_question_" . $qrow['id'];
+            if (isset($_FILES[$fileInputName]) && !empty($_FILES[$fileInputName]['name'][0])) {
+                $names = $_FILES[$fileInputName]['name'];
+                $cleanNames = [];
+                foreach ($names as $nm) {
+                    if ($nm !== '') {
+                        $cleanNames[] = $nm;
+                    }
+                }
+                $answer = implode(", ", $cleanNames);
             } else {
-                $answer = trim($value);
+                $answer = '';
+            }
+        } else {
+            // Input biasa dari POST
+            if (!isset($_POST[$fieldName])) {
+                $answer = '';
+            } else {
+                $value = $_POST[$fieldName];
+                if (is_array($value)) {
+                    $answer = implode(", ", $value);
+                } else {
+                    $answer = trim($value);
+                }
             }
         }
+
         $ansStmt->execute([$response_id, $qrow['id'], $answer]);
     }
 
-    // Simpan file lampiran (jika diizinkan & ada file)
-    if ($allow_attachments && !empty($_FILES['attachments']['name'][0])) {
-        $uploadDir = __DIR__ . '/../uploads/';
-        if (!is_dir($uploadDir)) {
-            mkdir($uploadDir, 0775, true);
-        }
+    // ==== Simpan file ke response_files ====
+    $uploadDir = __DIR__ . '/../uploads/';
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0775, true);
+    }
 
-        $fileStmt = $pdo->prepare("
-            INSERT INTO response_files (response_id, filename, original_name, size, created_at)
-            VALUES (?,?,?,?, NOW())
-        ");
+    // Prepared statement untuk simpan file (dengan question_id)
+    $fileStmt = $pdo->prepare("
+        INSERT INTO response_files (response_id, question_id, filename, original_name, size, created_at)
+        VALUES (?,?,?,?,?, NOW())
+    ");
 
+    // 1) Form lama: attachments[] global (question_id = NULL)
+    if ($allow_attachments && isset($_FILES['attachments']) && !empty($_FILES['attachments']['name'][0])) {
         foreach ($_FILES['attachments']['name'] as $i => $origName) {
-            if ($_FILES['attachments']['error'][$i] !== UPLOAD_ERR_OK) continue;
+            if ($_FILES['attachments']['error'][$i] !== UPLOAD_ERR_OK) {
+                continue;
+            }
 
             $tmpName = $_FILES['attachments']['tmp_name'][$i];
             $size    = $_FILES['attachments']['size'][$i];
 
-            $ext = pathinfo($origName, PATHINFO_EXTENSION);
-            $newName = uniqid('file_', true) . ($ext ? '.'.$ext : '');
-            $dest = $uploadDir . $newName;
+            $ext     = pathinfo($origName, PATHINFO_EXTENSION);
+            $newName = uniqid('file_', true) . ($ext ? '.' . $ext : '');
+            $dest    = $uploadDir . $newName;
 
             if (move_uploaded_file($tmpName, $dest)) {
                 $fileStmt->execute([
                     $response_id,
+                    null,       // question_id NULL untuk lampiran global
+                    $newName,
+                    $origName,
+                    $size
+                ]);
+            }
+        }
+    }
+
+    // 2) Pertanyaan bertipe "file": file_question_{id} (question_id diisi)
+    foreach ($questions as $qrow) {
+        if ($qrow['type'] !== 'file') {
+            continue;
+        }
+
+        $fileInputName = "file_question_" . $qrow['id'];
+        if (!isset($_FILES[$fileInputName]) || empty($_FILES[$fileInputName]['name'][0])) {
+            continue;
+        }
+
+        foreach ($_FILES[$fileInputName]['name'] as $i => $origName) {
+            if ($_FILES[$fileInputName]['error'][$i] !== UPLOAD_ERR_OK) {
+                continue;
+            }
+
+            $tmpName = $_FILES[$fileInputName]['tmp_name'][$i];
+            $size    = $_FILES[$fileInputName]['size'][$i];
+
+            $ext     = pathinfo($origName, PATHINFO_EXTENSION);
+            $newName = uniqid('file_', true) . ($ext ? '.' . $ext : '');
+            $dest    = $uploadDir . $newName;
+
+            if (move_uploaded_file($tmpName, $dest)) {
+                $fileStmt->execute([
+                    $response_id,
+                    $qrow['id'],  // simpan question_id
                     $newName,
                     $origName,
                     $size
@@ -85,14 +150,22 @@ try {
     }
 
     $pdo->commit();
+
 } catch (Exception $e) {
     $pdo->rollBack();
     die("Terjadi kesalahan saat menyimpan data: " . $e->getMessage());
 }
 
-// Bangun URL form publik untuk tombol "Kembali ke Form"
-$scheme  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https" : "http";
-$baseUrl = $scheme . '://' . $_SERVER['HTTP_HOST'] . "/App_Form";
+// ==== Bangun URL form publik untuk tombol "Kembali ke Form" ====
+// kalau kamu sudah punya helper base_url(), kita pakai itu
+if (function_exists('base_url')) {
+    $baseUrl = base_url();
+} else {
+    $scheme  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https" : "http";
+    $host    = $_SERVER['HTTP_HOST'];
+    $baseUrl = $scheme . '://' . $host . "/App_Form"; // sesuaikan jika di root
+}
+
 $formUrl = $baseUrl . "/f/" . $public_key;
 ?>
 <!DOCTYPE html>
@@ -144,7 +217,7 @@ $formUrl = $baseUrl . "/f/" . $public_key;
     </div>
     <div class="thank-body">
         <p class="mb-3">
-            Data yang kamu kirim akan diproses oleh pihak terkait.  
+            Data yang kamu kirim akan diproses oleh pihak terkait.
             Jika diperlukan, kamu bisa mengisi form ini kembali atau menutup halaman ini.
         </p>
 

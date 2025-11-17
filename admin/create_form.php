@@ -10,7 +10,18 @@ function generate_public_key(): string {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $title = $_POST['title'] ?? '';
     $desc  = $_POST['description'] ?? '';
-    $allow = isset($_POST['allow_attachments']) ? 1 : 0;
+
+    // Cek apakah ada pertanyaan bertipe "file"
+    $allow = 0;
+    if (!empty($_POST['type'])) {
+        foreach ($_POST['type'] as $t) {
+            if ($t === 'file') {
+                $allow = 1;
+                break;
+            }
+        }
+    }
+
     $public_key = generate_public_key();
 
     $stmt = $pdo->prepare("
@@ -80,10 +91,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <option value="radio">Radio</option>
                                 <option value="checkbox">Checkbox</option>
                                 <option value="select">Select</option>
+                                <option value="file">Upload File (Foto/Dokumen)</option>
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Opsi (radio/checkbox/select — pisahkan per baris)</label>
+                            <label class="form-label">
+                                Opsi (radio/checkbox/select — pisahkan per baris)
+                                <span class="text-muted small d-block">
+                                    Kosongkan untuk tipe selain radio/checkbox/select
+                                </span>
+                            </label>
                             <textarea name="options[]" class="form-control" rows="2"
                                       placeholder="opsi1&#10;opsi2&#10;opsi3"></textarea>
                         </div>
@@ -98,7 +115,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="card gform-card shadow-sm mb-3">
         <div class="gform-header">
             <h1>Buat Form Baru</h1>
-            <p>Atur judul, deskripsi, pertanyaan, dan upload dokumen/foto.</p>
+            <p>Atur judul, deskripsi, dan pertanyaan (termasuk upload dokumen/foto) seperti Google Form.</p>
         </div>
         <div class="card-body">
             <form method="POST">
@@ -110,13 +127,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="mb-3">
                     <label class="form-label">Deskripsi</label>
                     <textarea name="description" class="form-control" rows="3"></textarea>
-                </div>
-
-                <div class="form-check form-switch mb-4">
-                    <input class="form-check-input" type="checkbox" id="allow_attachments" name="allow_attachments">
-                    <label class="form-check-label" for="allow_attachments">
-                        Izinkan responden meng-upload dokumen / foto
-                    </label>
                 </div>
 
                 <h5 class="mt-2 mb-3">Pertanyaan</h5>
@@ -138,10 +148,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     <option value="radio">Radio</option>
                                     <option value="checkbox">Checkbox</option>
                                     <option value="select">Select</option>
+                                    <option value="file">Upload File (Foto/Dokumen)</option>
                                 </select>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">Opsi (radio/checkbox/select — pisahkan per baris)</label>
+                                <label class="form-label">
+                                    Opsi (radio/checkbox/select — pisahkan per baris)
+                                    <span class="text-muted small d-block">
+                                        Kosongkan untuk tipe selain radio/checkbox/select
+                                    </span>
+                                </label>
                                 <textarea name="options[]" class="form-control" rows="2"
                                           placeholder="opsi1&#10;opsi2&#10;opsi3"></textarea>
                             </div>
